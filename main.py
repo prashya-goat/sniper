@@ -1,4 +1,3 @@
-
 import asyncio
 import os
 import random
@@ -17,7 +16,6 @@ from telethon.errors import (
 )
 
 # --- MASTER CONFIGURATION ---
-# Ye global API credentials hain jo Telethon client chalane ke liye backend me lagte hain
 API_ID = int(os.environ.get("API_ID", 12345678))
 API_HASH = os.environ.get("API_HASH", "your_api_hash_here")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "your_botfather_token_here")
@@ -35,12 +33,11 @@ def run_flask():
     app.run(host="0.0.0.0", port=port)
 
 # --- STORAGE & STATE MANAGEMENT ---
-# Saved sessions: {"account_name": "string_session_code"}
 saved_sessions = {}
 active_session_name = None
 active_client = None
 
-user_states = {}  # Interactive flow states for BotFather chat
+user_states = {}  # {user_id: {"step": "phone/code/password", "name": ..., "phone": ..., "temp_client": ..., "phone_hash": ...}}
 
 # --- BOTFATHER BOT SETUP ---
 bot = TelegramClient('bot_session', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
@@ -49,6 +46,8 @@ bot = TelegramClient('bot_session', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 
 @bot.on(events.NewMessage(pattern=r'/start'))
 async def start_cmd(event):
+    if event.is_group or event.is_channel:
+        return
     help_text = (
         "🤖 **Multi-Account Sniper Bot Control Panel**\n\n"
         "📂 **Session Management:**\n"
@@ -64,6 +63,8 @@ async def start_cmd(event):
 
 @bot.on(events.NewMessage(pattern=r'/addaccount\s+(.+)'))
 async def add_account_cmd(event):
+    if event.is_group or event.is_channel:
+        return
     acc_name = event.pattern_match.group(1).strip()
     user_id = event.sender_id
     
@@ -72,6 +73,8 @@ async def add_account_cmd(event):
 
 @bot.on(events.NewMessage(pattern=r'/accounts'))
 async def list_accounts_cmd(event):
+    if event.is_group or event.is_channel:
+        return
     if not saved_sessions:
         await event.respond("❌ No accounts added yet. Use `/addaccount <name>` to add one.")
         return
@@ -85,6 +88,8 @@ async def list_accounts_cmd(event):
 @bot.on(events.NewMessage(pattern=r'/select\s+(.+)'))
 async def select_account_cmd(event):
     global active_session_name, active_client
+    if event.is_group or event.is_channel:
+        return
     acc_name = event.pattern_match.group(1).strip()
     
     if acc_name not in saved_sessions:
@@ -161,6 +166,8 @@ async def run_snipe_loop(target_username, channel_entity, event):
 @bot.on(events.NewMessage(pattern=r'/snipe\s+(.+)'))
 async def snipe_cmd(event):
     global snipe_task, is_sniping
+    if event.is_group or event.is_channel:
+        return
     if is_sniping:
         await event.respond("⚠️ A snipe task is already running. Send `/stop` first.")
         return
@@ -181,6 +188,8 @@ async def snipe_cmd(event):
 @bot.on(events.NewMessage(pattern=r'/stop'))
 async def stop_cmd(event):
     global is_sniping, snipe_task
+    if event.is_group or event.is_channel:
+        return
     if not is_sniping:
         await event.respond("ℹ️ No active snipe task.")
         return
@@ -191,20 +200,29 @@ async def stop_cmd(event):
 
 @bot.on(events.NewMessage(pattern=r'/status'))
 async def status_cmd(event):
+    if event.is_group or event.is_channel:
+        return
     if is_sniping:
         await event.respond(f"🟢 Sniping `@{active_target}` using `{active_session_name}`")
     else:
         await event.respond(f"⚪ Idle. Active Account: `{active_session_name or 'None'}`")
 
-# --- INTERACTIVE LOGIN HANDLER FOR ADDING ACCOUNTS ---
-@bot.on(events.NewMessage(chats=lambda c: True))
+# --- INTERACTIVE LOGIN HANDLER FOR ADDING ACCOUNTS (FIXED) ---
+@bot.on(events.NewMessage)
 async def interactive_auth(event):
+    if event.is_group or event.is_channel:
+        return
+        
     user_id = event.sender_id
     if user_id not in user_states:
         return
         
-    state = user_states[user_id]
     text = event.raw_text.strip()
+    # Ignore commands during interactive flow
+    if text.startswith('/'):
+        return
+
+    state = user_states[user_id]
     step = state["step"]
     
     if step == "phone":
@@ -216,9 +234,9 @@ async def interactive_auth(event):
             state["temp_client"] = temp_client
             state["phone_hash"] = sent.phone_code_hash
             state["step"] = "code"
-            await event.respond("📨 OTP sent! Please reply with the code:")
+            await event.respond("📨 OTP sent to your Telegram app! Please reply with the code:")
         except Exception as e:
-            await event.respond(f"❌ Error: {e}")
+            await event.respond(f"❌ Error sending code: {e}")
             del user_states[user_id]
 
     elif step == "code":

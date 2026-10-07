@@ -20,9 +20,9 @@ from telethon.errors import (
 API_ID = int(os.environ.get("API_ID", 35450000))
 API_HASH = os.environ.get("API_HASH", "2f06604ccfb6670846f4640ac40b8f97")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8894074405:AAHUbw_kkSMt4CXWHFxxu1LTj46OO5Sj7B0")
-TARGET_CHANNEL = os.environ.get("TARGET_CHANNEL_ID", "your_channel_username")
+TARGET_CHANNEL = os.environ.get("TARGET_CHANNEL_ID", "stepsonwithmomx")
 
-# --- DATABASE SETUP (Prevents data loss on redeploy if persistent disk is attached, or saves locally) ---
+# --- DATABASE SETUP ---
 DB_FILE = "sessions.db"
 
 def init_db():
@@ -94,7 +94,7 @@ async def start_cmd(event):
         "• `/accounts` - List all saved accounts\n"
         "• `/select <name>` - Choose an account to use\n\n"
         "🎯 **Sniping Controls:**\n"
-        "• `/snipe <username>` - Start infinite sniping until /stop\n"
+        "• `/snipe <username>` - Start sniping (10s interval)\n"
         "• `/stop` - Stop active sniping\n"
         "• `/status` - Check current bot status"
     )
@@ -160,7 +160,7 @@ async def run_snipe_loop(target_username, channel_entity, event):
     start_time = time.time()
     attempts = 0
     
-    await event.respond(f"🎯 **Infinite Sniping Started!** Target: `@{target_username}` using account **{active_session_name}**...\n(Bot will keep trying continuously until you send `/stop`)")
+    await event.respond(f"🎯 **Sniping Started!** Target: `@{target_username}` | Interval: **10 seconds**\nAccount: **{active_session_name}**\n(Running continuously until `/stop`)")
     
     while is_sniping:
         attempts += 1
@@ -182,13 +182,12 @@ async def run_snipe_loop(target_username, channel_entity, event):
             break
             
         except UsernameOccupiedError:
-            # Short delay for continuous high-speed loop without getting banned instantly
-            await asyncio.sleep(random.uniform(1.2, 1.8))
+            # Exactly 10 second gap (with minor jitter to look natural)
+            await asyncio.sleep(random.uniform(9.8, 10.5))
         except FloodWaitError as e:
             await event.respond(f"⚠️ FloodWait: Sleeping for {e.seconds} seconds...")
             await asyncio.sleep(e.seconds)
         except UsernameNotModifiedError:
-            # Means the username is already owned by this channel
             await event.respond(f"✅ Username `@{target_username}` is already successfully set on the channel!")
             is_sniping = False
             break
@@ -200,9 +199,9 @@ async def run_snipe_loop(target_username, channel_entity, event):
             await event.respond(f"❌ Error: Account has reached max public channel limit.")
             is_sniping = False
             break
-        except Exception as e:
-            # Catch minor connection glitches and continue looping without stopping
-            await asyncio.sleep(1.0)
+        except Exception:
+            # Safe fallback delay on any minor glitch
+            await asyncio.sleep(10.0)
 
     active_target = None
 
@@ -249,7 +248,7 @@ async def status_cmd(event):
     if event.is_group or event.is_channel:
         return
     if is_sniping:
-        await event.respond(f"🟢 Actively sniping `@{active_target}` using account `{active_session_name}`")
+        await event.respond(f"🟢 Actively sniping `@{active_target}` (10s delay) using `{active_session_name}`")
     else:
         await event.respond(f"⚪ Idle. Active Account: `{active_session_name or 'None'}`")
 
@@ -292,7 +291,7 @@ async def interactive_auth(event):
             await temp_client.disconnect()
             
             acc_name = state["name"]
-            save_session_to_db(acc_name, session_str) # Saved permanently to SQLite DB
+            save_session_to_db(acc_name, session_str)
             await event.respond(f"✅ Account **{acc_name}** added & saved securely in database!\nUse `/select {acc_name}` to activate it.")
             del user_states[user_id]
         except SessionPasswordNeededError:
@@ -309,7 +308,7 @@ async def interactive_auth(event):
             await temp_client.disconnect()
             
             acc_name = state["name"]
-            save_session_to_db(acc_name, session_str) # Saved permanently to SQLite DB
+            save_session_to_db(acc_name, session_str)
             await event.respond(f"✅ Account **{acc_name}** added with 2FA & saved securely in database!\nUse `/select {acc_name}` to activate it.")
             del user_states[user_id]
         except Exception as e:
@@ -320,7 +319,7 @@ def main():
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
     print("[*] Keep-alive Flask server running.")
-    print("[*] Master Bot is running with SQLite database storage...")
+    print("[*] Master Bot is running with 10s interval sniping loop...")
     bot.run_until_disconnected()
 
 if __name__ == '__main__':

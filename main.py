@@ -19,7 +19,7 @@ from telethon.errors import (
 # --- MASTER CONFIGURATION ---
 API_ID = int(os.environ.get("API_ID", 35450000))
 API_HASH = os.environ.get("API_HASH", "2f06604ccfb6670846f4640ac40b8f97")
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8894074405:AAHUbw_kkSMt4CXWHFxxu1LTj46OO5Sj7B0")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8894074405:AAHUbw_kkSMt4CXWHFxxu1LTj46OO5Sj7B")
 
 # GitHub Sync Configuration for Permanent Storage
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")

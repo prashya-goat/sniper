@@ -12,14 +12,14 @@ from telethon.sessions import StringSession
 from telethon.errors import (
     SessionPasswordNeededError,
     UsernameOccupiedError,
-    UsernameNotModifiedError,
+    UsernameInvalidError,
     FloodWaitError
 )
 
 # --- MASTER CONFIGURATION ---
 API_ID = int(os.environ.get("API_ID", 35450000))
 API_HASH = os.environ.get("API_HASH", "2f06604ccfb6670846f4640ac40b8f97")
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8894074405:AAHUbw_kkSMt4CXWHFxxu1LTj46OO5Sj7B")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8894074405:AAHUbw_kkSMt4CXWHFxxu1LTj46OO5Sj7B0")
 
 # GitHub Sync Configuration for Permanent Storage
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
@@ -113,7 +113,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Interleaved Multi-Account Sniper Bot is active 24/7!", 200
+    return "Safe-Check Interleaved Sniper Bot is active 24/7!", 200
 
 def run_flask():
     port = int(os.environ.get("PORT", 5000))
@@ -133,11 +133,11 @@ async def start_cmd(event):
     if event.is_group or event.is_channel:
         return
     help_text = (
-        "🤖 **Interleaved Dual-Account Sniper Bot**\n\n"
+        "🤖 **Safe-Check Interleaved Sniper Bot**\n\n"
         "📂 **Commands:**\n"
         "• `/addaccount <name>` - Add accounts\n"
         "• `/accounts` - View saved accounts\n"
-        "• `/snipe <username>` - Starts interleaved dual sniping (Account 1 @ 0s, Account 2 @ 10s)\n"
+        "• `/snipe <username>` - Starts safe check rotation sniping\n"
         "• `/stop` - Stop all sniping\n"
         "• `/status` - Check current status"
     )
@@ -165,8 +165,8 @@ async def list_accounts_cmd(event):
         msg += f"• `{name}`\n"
     await event.respond(msg)
 
-# --- INDIVIDUAL WORKER FOR INTERLEAVED TIMING ---
-async def sniper_worker(acc_name, session_str, target_username, initial_delay, event):
+# --- SAFE-CHECK INTERLEAVED WORKER ---
+async def safe_sniper_worker(acc_name, session_str, target_username, initial_delay, event):
     global is_sniping
     client = TelegramClient(StringSession(session_str), API_ID, API_HASH, flood_sleep_threshold=0)
     try:
@@ -175,43 +175,53 @@ async def sniper_worker(acc_name, session_str, target_username, initial_delay, e
         await event.respond(f"❌ Connection failed for account `{acc_name}`: {e}")
         return
 
-    # Initial staggered delay (e.g., 0s for first account, 10s for second account)
     if initial_delay > 0:
         await asyncio.sleep(initial_delay)
 
-    attempts = 0
+    checks = 0
     start_time = time.time()
 
     while is_sniping:
-        attempts += 1
+        checks += 1
         try:
-            await client(functions.account.UpdateUsernameRequest(username=target_username))
+            # Safe check first (Doesn't trigger FloodWait easily)
+            is_free = await client(functions.account.CheckUsernameRequest(username=target_username))
             
-            elapsed = round(time.time() - start_time, 2)
-            await event.respond(
-                f"🎉 **SUCCESS! Username Claimed!**\n\n"
-                f"📌 Username: `@{target_username}`\n"
-                f"👤 Successful Account: `{acc_name}`\n"
-                f"⏱️ Time Taken: **{elapsed} seconds**\n"
-                f"🔄 Total Attempts (by this account): {attempts}"
-            )
-            is_sniping = False
-            break
-            
-        except UsernameOccupiedError:
-            # 20 seconds total interval per account, but since we have 2 accounts interleaved, total effective hits go every 10 seconds!
-            await asyncio.sleep(20.0)
-            
+            if is_free:
+                elapsed = round(time.time() - start_time, 2)
+                await event.respond(f"🔥 [FREE FOUND] `@{target_username}` is free! Registering via account `{acc_name}`...")
+
+                # Create a channel to claim the username safely
+                channel = await client(functions.channels.CreateChannelRequest(
+                    title=target_username,
+                    about="Sniper Channel",
+                    megagroup=False
+                ))
+
+                # Assign username to the created channel
+                await client(functions.channels.UpdateUsernameRequest(
+                    channel=channel.chats[0].id,
+                    username=target_username
+                ))
+
+                await event.respond(
+                    f"🎉 **SUCCESS! Username Sniped Successfully!**\n\n"
+                    f"📌 Username: `@{target_username}`\n"
+                    f"👤 Account Used: `{acc_name}`\n"
+                    f"⏱️ Time Taken: **{elapsed} seconds**\n"
+                    f"🔍 Total Checks: {checks}"
+                )
+                is_sniping = False
+                break
+            else:
+                # Still occupied, wait before next check round
+                await asyncio.sleep(15.0)
+
         except FloodWaitError as e:
-            await event.respond(f"⚠️ Account `{acc_name}` hit FloodWait ({e.seconds}s). Sleeping that specific account...")
+            await event.respond(f"⚠️ Account `{acc_name}` hit FloodWait ({e.seconds}s) during check. Sleeping that account...")
             await asyncio.sleep(e.seconds)
-            
-        except UsernameNotModifiedError:
-            await event.respond(f"✅ Username `@{target_username}` is already set on account `{acc_name}`!")
-            is_sniping = False
-            break
         except Exception:
-            await asyncio.sleep(20.0)
+            await asyncio.sleep(15.0)
 
     try:
         await client.disconnect()
@@ -229,7 +239,7 @@ async def snipe_cmd(event):
         
     accounts = get_all_accounts_from_db()
     if len(accounts) < 2:
-        await event.respond(f"❌ You need at least **2 accounts** saved in database for this interleaved strategy! Currently found: {len(accounts)}. Add more using `/addaccount`.")
+        await event.respond(f"❌ You need at least **2 accounts** saved in database for this safe interleaved strategy! Currently found: {len(accounts)}. Add more using `/addaccount`.")
         return
 
     target_username = event.pattern_match.group(1).strip().lstrip('@')
@@ -237,7 +247,6 @@ async def snipe_cmd(event):
     active_target = target_username
     snipe_tasks = []
 
-    # Pick first 2 accounts for dual-interleaved rotation
     acc1 = accounts[0]
     acc2 = accounts[1]
     
@@ -245,16 +254,15 @@ async def snipe_cmd(event):
     str2 = get_session_from_db(acc2)
 
     await event.respond(
-        f"🎯 **Interleaved Dual-Sniper Started!**\n"
+        f"🎯 **Safe-Check Interleaved Sniper Started!**\n"
         f"Target: `@{target_username}`\n"
-        f"• Account 1 (`{acc1}`): Starts immediately (0s gap, then every 20s)\n"
-        f"• Account 2 (`{acc2}`): Starts with 10s offset (then every 20s)\n"
-        f"⚡ *Result: Effective request frequency = Every 10 seconds across accounts!*"
+        f"• Account 1 (`{acc1}`): Starts check immediately (0s gap)\n"
+        f"• Account 2 (`{acc2}`): Starts check with 7s offset\n"
+        f"⚡ *Result: Safe availability checking without spamming penalties!*"
     )
 
-    # Launch both workers concurrently with a 10-second offset
-    task1 = asyncio.create_task(sniper_worker(acc1, str1, target_username, 0, event))
-    task2 = asyncio.create_task(sniper_worker(acc2, str2, target_username, 10, event))
+    task1 = asyncio.create_task(safe_sniper_worker(acc1, str1, target_username, 0, event))
+    task2 = asyncio.create_task(safe_sniper_worker(acc2, str2, target_username, 7, event))
     
     snipe_tasks = [task1, task2]
 
@@ -269,14 +277,14 @@ async def stop_cmd(event):
     is_sniping = False
     for task in snipe_tasks:
         task.cancel()
-    await event.respond("🛑 Interleaved sniping stopped successfully.")
+    await event.respond("🛑 Sniping stopped successfully.")
 
 @bot.on(events.NewMessage(pattern=r'/status'))
 async def status_cmd(event):
     if event.is_group or event.is_channel:
         return
     if is_sniping:
-        await event.respond(f"🟢 Dual-Interleaved Sniping active on `@{target_username}`.")
+        await event.respond(f"🟢 Safe-Check Sniping active on `@{active_target}`.")
     else:
         await event.respond("⚪ Idle.")
 
@@ -340,7 +348,7 @@ async def interactive_auth(event):
 
 def main():
     threading.Thread(target=run_flask, daemon=True).start()
-    print("[*] Interleaved Dual-Account Sniper Bot running 24/7.")
+    print("[*] Safe-Check Interleaved Sniper Bot running 24/7.")
     bot.run_until_disconnected()
 
 if __name__ == '__main__':

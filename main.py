@@ -32,12 +32,10 @@ os.makedirs(SESSION_DIR, exist_ok=True)
 current_target = None
 active_clients = []
 is_sniper_running = False
+user_states = {}
 
-# Temporary states for phone login conversation
-user_states = {} # chat_id -> {'state': 'WAITING_PHONE'/'WAITING_OTP'/'WAITING_2FA', 'phone': ..., 'client': ...}
-
-# --- Control Bot Client ---
-control_bot = TelegramClient('bot_control_session', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
+# --- Control Bot Client (Initialized Properly) ---
+control_bot = TelegramClient('bot_control_session', API_ID, API_HASH)
 
 
 # --- Smart Sniper Worker (Dynamic Timing based on Account Count) ---
@@ -45,8 +43,6 @@ async def sniper_worker(client_index, client, total_accounts):
     global is_sniper_running, current_target
     print(f"🚀 Sniper Worker {client_index}/{total_accounts} started checking @{current_target}...")
     
-    # Smart gap calculation: Jitne accounts honge, us hisab se delay optimize hoga
-    # Agar 5 accounts hain toh har account ke beech ka gap 10 seconds rahega
     loop_delay = max(5.0, total_accounts * 2.0)
     
     while is_sniper_running and current_target:
@@ -58,10 +54,9 @@ async def sniper_worker(client_index, client, total_accounts):
             if result:
                 print(f"🎉 SUCCESS! Username @{current_target} is available! Grabbed by Account {client_index}")
                 grabbed_user = current_target
-                is_sniper_running = False  # Stop sniper after grab
+                is_sniper_running = False  
                 
                 try:
-                    # 1. Create Channel
                     channel = await client(functions.channels.CreateChannelRequest(
                         title=f"Sniped {grabbed_user}",
                         about="Secured by Telegram Sniper Bot",
@@ -69,22 +64,18 @@ async def sniper_worker(client_index, client, total_accounts):
                     ))
                     channel_id = channel.chats[0].id
                     
-                    # 2. Set Username
                     await client(functions.channels.UpdateUsernameRequest(
                         channel=channel_id,
                         username=grabbed_user
                     ))
                     
-                    # 3. Export Invite Link
                     invite = await client(functions.messages.ExportChatInviteRequest(peer=channel_id))
                     
-                    # 4. Notify Owner
                     await control_bot.send_message(
                         f"@{OWNER_USERNAME}", 
                         f"🎉 **Username Sniped Successfully!**\n\nTarget: `@{grabbed_user}`\n\n🔗 Join this channel quickly to claim ownership:\n{invite.link}"
                     )
                     
-                    # 5. Wait for owner to join & transfer ownership
                     print(f"⏳ Waiting for @{OWNER_USERNAME} to join the channel for ownership transfer...")
                     while True:
                         await asyncio.sleep(5)
@@ -118,7 +109,6 @@ async def sniper_worker(client_index, client, total_accounts):
         except Exception:
             pass
             
-        # Smart dynamic loop delay
         await asyncio.sleep(loop_delay)
 
 
@@ -181,7 +171,7 @@ async def callback_query_handler(event):
         await event.edit("🛑 Sniper successfully rok diya gaya hai.", buttons=get_main_menu_buttons())
 
 
-# --- Conversation Handler for Adding Sessions (String or Phone/OTP) ---
+# --- Conversation Handler for Adding Sessions ---
 
 @control_bot.on(events.NewMessage)
 async def message_handler(event):
@@ -193,7 +183,6 @@ async def message_handler(event):
     chat_id = event.chat_id
     text = event.text.strip()
     
-    # Agar koi command hai toh use ye handler ignore karega (command handlers alag hain)
     if text.startswith('/'):
         return
         
@@ -203,7 +192,6 @@ async def message_handler(event):
     state_data = user_states[chat_id]
     state = state_data.get('state')
     
-    # 1. Handling Session String Input
     if state == 'WAITING_STRING':
         del user_states[chat_id]
         try:
@@ -221,7 +209,6 @@ async def message_handler(event):
                 
                 await test_client.disconnect()
                 
-                # Save as file session
                 file_client = TelegramClient(file_path, API_ID, API_HASH)
                 await file_client.connect()
                 temp_str_client = TelegramClient(StringSession(text), API_ID, API_HASH)
@@ -243,7 +230,6 @@ async def message_handler(event):
         except Exception as e:
             await event.respond(f"❌ Error: {e}", buttons=get_main_menu_buttons())
             
-    # 2. Handling Phone Login - Step 1: Phone Number
     elif state == 'WAITING_PHONE':
         phone_number = text
         try:
@@ -265,7 +251,6 @@ async def message_handler(event):
             await event.respond(f"❌ Error sending code: {e}", buttons=get_main_menu_buttons())
             del user_states[chat_id]
             
-    # 3. Handling Phone Login - Step 2: OTP Code
     elif state == 'WAITING_OTP':
         otp_code = text
         client = state_data['client']
@@ -275,11 +260,9 @@ async def message_handler(event):
         
         try:
             await client.sign_in(phone=phone, code=otp_code, phone_code_hash=phone_code_hash)
-            # Agar successfully login ho gaya
             me = await client.get_me()
             await client.disconnect()
             
-            # Rename temp file to permanent session file
             perm_file = os.path.join(SESSION_DIR, f"session_{me.id}.session")
             if os.path.exists(perm_file):
                 os.remove(perm_file)
@@ -289,7 +272,6 @@ async def message_handler(event):
             await event.respond(f"✅ **Account Login Successful & Saved!**\n👤 Name: {me.first_name}\n📱 Phone: `{phone}`", buttons=get_main_menu_buttons())
             
         except SessionPasswordNeededError:
-            # 2FA Password required
             user_states[chat_id] = {
                 'state': 'WAITING_2FA',
                 'client': client,
@@ -304,7 +286,6 @@ async def message_handler(event):
                 pass
             del user_states[chat_id]
             
-    # 4. Handling Phone Login - Step 3: 2FA Password
     elif state == 'WAITING_2FA':
         password = text
         client = state_data['client']
@@ -376,19 +357,31 @@ async def snipe_cmd(event):
         f"🚀 **Sniper Started!**\n"
         f"🎯 Target: `@{current_target}`\n"
         f"👥 Active Accounts: **{total_accounts}**\n"
-        f"⚡ Dynamic Time Management Enabled (Staggered start + smart loop delay).",
+        f"⚡ Dynamic Time Management Enabled.",
         buttons=get_main_menu_buttons()
     )
     
-    # Staggered start gap (Har account ke beech 3-5 seconds ka gap taaki flood wait na aaye)
     tasks = []
     for idx, client in enumerate(active_clients):
         tasks.append(asyncio.create_task(sniper_worker(idx + 1, client, total_accounts)))
         await asyncio.sleep(3.0)
 
+@control_bot.on(events.NewMessage(pattern='/stopsniper'))
+async def stop_sniper_cmd(event):
+    global is_sniper_running
+    if event.sender.username != OWNER_USERNAME:
+        return
+    is_sniper_running = False
+    await event.respond("🛑 Sniper stopped successfully.")
 
-# --- Main Execution ---
-if __name__ == '__main__':
+
+# --- Main Async Entry Point ---
+async def main():
     keep_alive()
-    print("Smart sniper control panel started...")
-    control_bot.run_until_disconnected()
+    print("Starting Telegram control bot...")
+    await control_bot.start(bot_token=BOT_TOKEN)
+    print("✅ Control bot started successfully and listening for messages!")
+    await control_bot.run_until_disconnected()
+
+if __name__ == '__main__':
+    asyncio.run(main())

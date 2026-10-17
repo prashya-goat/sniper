@@ -246,6 +246,8 @@ async def stat_cmd(event):
 
 @control_bot.on(events.CallbackQuery)
 async def callback_query_handler(event):
+    global is_sniper_running
+    
     if event.sender_id != OWNER_ID:
         await event.answer("Access Denied!", alert=True)
         return
@@ -289,7 +291,6 @@ async def callback_query_handler(event):
         await event.respond(msg, buttons=get_main_menu_buttons())
         
     elif data == b"stop_sniper":
-        global is_sniper_running
         is_sniper_running = False
         await event.respond("🛑 Sniper successfully rok diya gaya hai.", buttons=get_main_menu_buttons())
     

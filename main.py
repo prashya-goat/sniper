@@ -245,7 +245,8 @@ async def message_handler(event):
             
             asyncio.create_task(start_session_otp_listeners())
         except Exception as e:
-            await event.respond(f"❌ Error processing file: {e}", buttons=get_main_menu_buttons())
+            err_text = f"❌ Error processing file: {e}"
+            await event.respond(err_text, buttons=get_main_menu_buttons())
         return
 
     if not event.text:
@@ -415,18 +416,21 @@ async def snipe_cmd(event):
             client = TelegramClient(file_path, API_ID, API_HASH)
             await client.connect()
             is_auth = await client.is_user_authorized()
-            print(f"🔍 Checking session {os.path.basename(file_path)} -> Authorized: {is_auth}")
             if is_auth:
                 active_clients.append(client)
             else:
-                print(f"⚠️ Session {os.path.basename(file_path)} is NOT authorized!")
+                err_msg = f"⚠️ Session Unauthorized: {os.path.basename(file_path)}"
+                print(err_msg)
+                await control_bot.send_message(OWNER_ID, err_msg)
                 await client.disconnect()
         except Exception as e:
-            print(f"❌ Error loading session {file_path}: {e}")
+            err_msg = f"❌ Session Error ({os.path.basename(file_path)}): {e}"
+            print(err_msg)
+            await control_bot.send_message(OWNER_ID, err_msg)
             
     total_accounts = len(active_clients)
     if total_accounts == 0:
-        await event.respond("❌ Ek bhi valid session file nahi chali! (Check railway logs for exact error)")
+        await event.respond("❌ Ek bhi valid session file nahi chali! (Error details upar bhej di gayi hain)")
         return
         
     is_sniper_running = True

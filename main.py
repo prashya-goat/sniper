@@ -42,6 +42,10 @@ is_sniper_running = False
 user_states = {}
 snipe_start_time = 0
 
+# --- Detailed Stats Tracking ---
+total_attempts = 0
+account_stats_map = {}  # {client_index: {'attempts': 0, 'status': 'Idle', 'flood_till': 0}}
+
 # --- Control Bot Client ---
 control_bot = TelegramClient('bot_control_session', API_ID, API_HASH)
 
@@ -68,29 +72,38 @@ async def start_session_otp_listeners():
             print(f"⚠️ Could not start listener for {file_path}: {e}")
 
 
-# --- Smart Rotational Sniper Master Loop (Staggered Delay Logic) ---
-async def rotational_sniper_loop():
-    global is_sniper_running, current_target, active_clients, snipe_start_time
+# --- Advanced Sniper Loop with Precise Stats & Flood Tracking ---
+async def advanced_sniper_loop():
+    global is_sniper_running, current_target, active_clients, snipe_start_time, total_attempts, account_stats_map
     
-    total_accounts = len(active_clients)
+    total_accounts = len(active_accounts)
     if total_accounts == 0:
         is_sniper_running = False
         return
 
-    # User ke kehne ke anusar: Har account ke beech ka gap (jaise 8-10 seconds)
-    # Taaki saare accounts ek sath hit na karein aur loop smooth chale.
-    account_delay = 10.0 if total_accounts > 1 else 5.0
-    
-    print(f"🚀 Rotational Sniper started with {total_accounts} accounts targeting @{current_target}...")
+    print(f"🚀 Advanced Sniper Loop started with {total_accounts} accounts targeting @{current_target}...")
     
     while is_sniper_running and current_target:
+        current_time = time.time()
+        
         for idx, client in enumerate(active_clients):
             if not is_sniper_running or not current_target:
                 break
                 
             client_index = idx + 1
+            stats = account_stats_map[client_index]
+            
+            # Agar is account par FloodWait laga hai aur waqt abhi baaki hai, toh skip karo
+            if current_time < stats['flood_till']:
+                remaining_flood = int(stats['flood_till'] - current_time)
+                stats['status'] = f"⏳ FloodWait ({remaining_flood}s left)"
+                continue
+            
             try:
-                print(f"🔍 Account {client_index}/{total_accounts} checking @{current_target}...")
+                stats['status'] = "🟢 Checking..."
+                total_attempts += 1
+                stats['attempts'] += 1
+                
                 result = await client(functions.account.CheckUsernameRequest(
                     username=current_target
                 ))
@@ -121,6 +134,7 @@ async def rotational_sniper_loop():
                             f"🎉 **Username Sniped Successfully!**\n\n"
                             f"🎯 Target: `@{grabbed_user}`\n"
                             f"⏱️ **Time Taken:** `{time_taken} seconds`\n"
+                            f"🔄 **Total Attempts:** `{total_attempts}`\n"
                             f"👥 Grabbed by Account #{client_index}\n\n"
                             f"🔗 Join this channel quickly to claim ownership:\n{invite.link}"
                         )
@@ -163,18 +177,23 @@ async def rotational_sniper_loop():
                         print(f"❌ Error during channel claiming: {ex}")
                     return
                 else:
-                    print(f"[-] Account {client_index}: @{current_target} is taken.")
+                    stats['status'] = "🔴 Taken (Checked)"
                     
             except FloodWaitError as e:
-                err_msg = f"⚠️ Account {client_index} hit FloodWait: sleeping for {e.seconds} seconds."
+                wait_sec = e.seconds
+                stats['flood_till'] = time.time() + wait_sec
+                stats['status'] = f"⚠️ FloodWait ({wait_sec}s)"
+                err_msg = f"⚠️ Account #{client_index} hit FloodWait of **{wait_sec} seconds**!"
                 print(err_msg)
                 await control_bot.send_message(OWNER_ID, err_msg)
-                await asyncio.sleep(e.seconds)
             except Exception as e:
-                print(f"⚠️ Account {client_index} check error: {e}")
+                stats['status'] = f"❌ Error: {str(e)[:30]}"
                 
-            # Har account ki request ke beech mein user ka diya hua gap delay
-            await asyncio.sleep(account_delay)
+            # Accounts ke beech mein chhota gap taaki overload na ho
+            await asyncio.sleep(2.0)
+            
+        # Short pause before next full round across accounts
+        await asyncio.sleep(1.0)
 
 
 # --- Inline Keyboard Menu ---
@@ -182,7 +201,7 @@ def get_main_menu_buttons():
     return [
         [Button.inline("➕ Add via String/File", b"add_string"), Button.inline("📱 Add via Phone", b"add_phone")],
         [Button.inline("📂 View Sessions", b"list_sessions"), Button.inline("🚀 Start Snipe", b"menu_snipe")],
-        [Button.inline("🛑 Stop Sniper", b"stop_sniper")]
+        [Button.inline("📊 Check Status (/stat)", b"check_stat"), Button.inline("🛑 Stop Sniper", b"stop_sniper")]
     ]
 
 
@@ -197,6 +216,35 @@ async def start_cmd(event):
         "Neche diye gaye buttons ka use karke apne sessions manage karo:",
         buttons=get_main_menu_buttons()
     )
+
+
+@control_bot.on(events.NewMessage(pattern='/stat'))
+async def stat_cmd(event):
+    if event.sender_id != OWNER_ID:
+        return
+    
+    global is_sniper_running, current_target, total_attempts, snipe_start_time, account_stats_map
+    
+    status_text = "🟢 **Running**" if is_sniper_running else "🔴 **Stopped**"
+    elapsed = round(time.time() - snipe_start_time, 1) if is_sniper_running else 0
+    
+    msg = (
+        f"📊 **Live Sniper Statistics**\n\n"
+        f"⚙️ **Status:** {status_text}\n"
+        f"🎯 **Target:** `@{current_target if current_target else 'None'}`\n"
+        f"🔄 **Total Attempts:** `{total_attempts}`\n"
+        f"⏱️ **Elapsed Time:** `{elapsed} seconds`\n"
+        f"👥 **Active Accounts:** `{len(active_clients)}`\n\n"
+        f"📋 **Detailed Account Status:**\n"
+    )
+    
+    if not account_stats_map:
+        msg += "<i>No active accounts or snipe not started.</i>"
+    else:
+        for acc_id, data in account_stats_map.items():
+            msg += f"- **Account #{acc_id}** ➔ Attempts: `{data['attempts']}` | Status: {data['status']}\n"
+            
+    await event.respond(msg, buttons=get_main_menu_buttons())
 
 
 @control_bot.on(events.CallbackQuery)
@@ -229,6 +277,19 @@ async def callback_query_handler(event):
         
     elif data == b"menu_snipe":
         await event.respond("🎯 Target set karne ke liye command use karein:\n\n👉 `/snipe <username>`\n(Example: `/snipe PARSHYA`)", buttons=get_main_menu_buttons())
+        
+    elif data == b"check_stat":
+        status_text = "🟢 **Running**" if is_sniper_running else "🔴 **Stopped**"
+        elapsed = round(time.time() - snipe_start_time, 1) if is_sniper_running else 0
+        msg = (
+            f"📊 **Live Sniper Statistics**\n\n"
+            f"⚙️ **Status:** {status_text}\n"
+            f"🎯 **Target:** `@{current_target if current_target else 'None'}`\n"
+            f"🔄 **Total Attempts:** `{total_attempts}`\n"
+            f"⏱️ **Elapsed Time:** `{elapsed} seconds`\n"
+            f"👥 **Active Accounts:** `{len(active_clients)}`\n"
+        )
+        await event.respond(msg, buttons=get_main_menu_buttons())
         
     elif data == b"stop_sniper":
         global is_sniper_running
@@ -417,7 +478,7 @@ async def message_handler(event):
 
 @control_bot.on(events.NewMessage(pattern='/snipe'))
 async def snipe_cmd(event):
-    global is_sniper_running, current_target, active_clients, snipe_start_time
+    global is_sniper_running, current_target, active_clients, snipe_start_time, total_attempts, account_stats_map
     if event.sender_id != OWNER_ID:
         return
     
@@ -437,7 +498,6 @@ async def snipe_cmd(event):
         await event.respond("❌ Koi session file nahi mili! Pehle sessions add karo.", buttons=get_main_menu_buttons())
         return
         
-    # Clear temp folder before copying
     for f in os.listdir(TEMP_SNIPE_DIR):
         try:
             os.remove(os.path.join(TEMP_SNIPE_DIR, f))
@@ -445,7 +505,10 @@ async def snipe_cmd(event):
             pass
 
     active_clients.clear()
-    for file_path in session_files:
+    account_stats_map.clear()
+    
+    for idx, file_path in enumerate(session_files):
+        client_index = idx + 1
         try:
             base_name = os.path.basename(file_path)
             temp_copy_path = os.path.join(TEMP_SNIPE_DIR, base_name)
@@ -456,34 +519,31 @@ async def snipe_cmd(event):
             is_auth = await client.is_user_authorized()
             if is_auth:
                 active_clients.append(client)
+                account_stats_map[client_index] = {'attempts': 0, 'status': '🟢 Ready', 'flood_till': 0}
             else:
-                err_msg = f"⚠️ Session Unauthorized: {base_name}"
-                print(err_msg)
-                await control_bot.send_message(OWNER_ID, err_msg)
+                account_stats_map[client_index] = {'attempts': 0, 'status': '⚠️ Unauthorized', 'flood_till': 0}
                 await client.disconnect()
         except Exception as e:
-            err_msg = f"❌ Session Error ({os.path.basename(file_path)}): {e}"
-            print(err_msg)
-            await control_bot.send_message(OWNER_ID, err_msg)
+            account_stats_map[client_index] = {'attempts': 0, 'status': '❌ Error', 'flood_till': 0}
             
     total_accounts = len(active_clients)
     if total_accounts == 0:
-        await event.respond("❌ Ek bhi valid session file nahi chali! (Error details upar bhej di gayi hain)")
+        await event.respond("❌ Ek bhi valid session file nahi chali!")
         return
         
     is_sniper_running = True
-    snipe_start_time = time.time()  # Timer start
+    snipe_start_time = time.time()
+    total_attempts = 0
     
     await event.respond(
-        f"🚀 **Rotational Sniper Started!**\n"
+        f"🚀 **Advanced Sniper Started!**\n"
         f"🎯 Target: `@{current_target}`\n"
-        f"👥 Active Accounts: **{total_accounts}**\n"
-        f"⏱️ Staggered Delay Mode Active.",
+        f"👥 Active Accounts: **{total_accounts}**\n\n"
+        f"💡 Ab `/stat` bhej kar check kar sakta hai ki kis account ne kitni baar try kiya aur kahin FloodWait toh nahi laga!",
         buttons=get_main_menu_buttons()
     )
     
-    # Background task for rotational sequential checks
-    asyncio.create_task(rotational_sniper_loop())
+    asyncio.create_task(advanced_sniper_loop())
 
 @control_bot.on(events.NewMessage(pattern='/stopsniper'))
 async def stop_sniper_cmd(event):

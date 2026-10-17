@@ -1,6 +1,7 @@
 import asyncio
 import os
 import shutil
+import time
 import zipfile
 from telethon import TelegramClient, functions, types, events, Button
 from telethon.sessions import StringSession
@@ -39,6 +40,7 @@ current_target = None
 active_clients = []
 is_sniper_running = False
 user_states = {}
+snipe_start_time = 0
 
 # --- Control Bot Client ---
 control_bot = TelegramClient('bot_control_session', API_ID, API_HASH)
@@ -66,91 +68,113 @@ async def start_session_otp_listeners():
             print(f"⚠️ Could not start listener for {file_path}: {e}")
 
 
-# --- Smart Sniper Worker ---
-async def sniper_worker(client_index, client, total_accounts):
-    global is_sniper_running, current_target
-    print(f"🚀 Sniper Worker {client_index}/{total_accounts} started checking @{current_target}...")
+# --- Smart Rotational Sniper Master Loop (Staggered Delay Logic) ---
+async def rotational_sniper_loop():
+    global is_sniper_running, current_target, active_clients, snipe_start_time
     
-    loop_delay = max(5.0, total_accounts * 2.0)
+    total_accounts = len(active_clients)
+    if total_accounts == 0:
+        is_sniper_running = False
+        return
+
+    # User ke kehne ke anusar: Har account ke beech ka gap (jaise 8-10 seconds)
+    # Taaki saare accounts ek sath hit na karein aur loop smooth chale.
+    account_delay = 10.0 if total_accounts > 1 else 5.0
+    
+    print(f"🚀 Rotational Sniper started with {total_accounts} accounts targeting @{current_target}...")
     
     while is_sniper_running and current_target:
-        try:
-            result = await client(functions.account.CheckUsernameRequest(
-                username=current_target
-            ))
-            
-            if result:
-                print(f"🎉 SUCCESS! Username @{current_target} is available! Grabbed by Account {client_index}")
-                grabbed_user = current_target
-                is_sniper_running = False  
-                
-                try:
-                    channel = await client(functions.channels.CreateChannelRequest(
-                        title=f"Sniped {grabbed_user}",
-                        about="Secured by Telegram Sniper Bot",
-                        megagroup=False
-                    ))
-                    channel_id = channel.chats[0].id
-                    
-                    await client(functions.channels.UpdateUsernameRequest(
-                        channel=channel_id,
-                        username=grabbed_user
-                    ))
-                    
-                    invite = await client(functions.messages.ExportChatInviteRequest(peer=channel_id))
-                    
-                    await control_bot.send_message(
-                        OWNER_ID, 
-                        f"🎉 **Username Sniped Successfully!**\n\nTarget: `@{grabbed_user}`\n\n🔗 Join this channel quickly to claim ownership:\n{invite.link}"
-                    )
-                    
-                    print(f"⏳ Waiting for Owner (ID: {OWNER_ID}) to join the channel...")
-                    while True:
-                        await asyncio.sleep(5)
-                        try:
-                            user_entity = await client.get_entity(OWNER_ID)
-                            
-                            is_member = False
-                            async for user in client.iter_participants(channel_id):
-                                if user.id == OWNER_ID:
-                                    is_member = True
-                                    break
-                            
-                            if is_member:
-                                await client(functions.channels.EditAdminRequest(
-                                    channel=channel_id,
-                                    user_id=user_entity.id,
-                                    admin_rights=types.ChatAdminRights(
-                                        change_info=True, post_messages=True, edit_messages=True,
-                                        delete_messages=True, invite_users=True, pin_messages=True,
-                                        manage_call=True, manage_topics=True, invite_link=True, admin=True
-                                    ),
-                                    rank="Owner"
-                                ))
-                                await control_bot.send_message(OWNER_ID, f"👑 Ownership transferred successfully for `@{grabbed_user}`!")
-                                
-                                try:
-                                    await client(functions.channels.LeaveChannelRequest(channel=channel_id))
-                                    print("👋 Sniper account left the channel successfully.")
-                                except Exception as leave_err:
-                                    print(f"⚠️ Could not leave channel: {leave_err}")
-                                    
-                                break
-                        except Exception:
-                            pass
-                except Exception as ex:
-                    print(f"❌ Error during channel claiming: {ex}")
+        for idx, client in enumerate(active_clients):
+            if not is_sniper_running or not current_target:
                 break
-            else:
-                print(f"[-] Account {client_index}: @{current_target} is taken.")
                 
-        except FloodWaitError as e:
-            print(f"⚠️ Account {client_index} hit FloodWait: sleeping for {e.seconds} seconds.")
-            await asyncio.sleep(e.seconds)
-        except Exception as e:
-            print(f"⚠️ Sniper worker error: {e}")
-            
-        await asyncio.sleep(loop_delay)
+            client_index = idx + 1
+            try:
+                print(f"🔍 Account {client_index}/{total_accounts} checking @{current_target}...")
+                result = await client(functions.account.CheckUsernameRequest(
+                    username=current_target
+                ))
+                
+                if result:
+                    time_taken = round(time.time() - snipe_start_time, 2)
+                    print(f"🎉 SUCCESS! Username @{current_target} is available! Grabbed by Account {client_index} in {time_taken} seconds.")
+                    grabbed_user = current_target
+                    is_sniper_running = False  
+                    
+                    try:
+                        channel = await client(functions.channels.CreateChannelRequest(
+                            title=f"Sniped {grabbed_user}",
+                            about="Secured by Telegram Sniper Bot",
+                            megagroup=False
+                        ))
+                        channel_id = channel.chats[0].id
+                        
+                        await client(functions.channels.UpdateUsernameRequest(
+                            channel=channel_id,
+                            username=grabbed_user
+                        ))
+                        
+                        invite = await client(functions.messages.ExportChatInviteRequest(peer=channel_id))
+                        
+                        await control_bot.send_message(
+                            OWNER_ID, 
+                            f"🎉 **Username Sniped Successfully!**\n\n"
+                            f"🎯 Target: `@{grabbed_user}`\n"
+                            f"⏱️ **Time Taken:** `{time_taken} seconds`\n"
+                            f"👥 Grabbed by Account #{client_index}\n\n"
+                            f"🔗 Join this channel quickly to claim ownership:\n{invite.link}"
+                        )
+                        
+                        print(f"⏳ Waiting for Owner (ID: {OWNER_ID}) to join the channel...")
+                        while True:
+                            await asyncio.sleep(5)
+                            try:
+                                user_entity = await client.get_entity(OWNER_ID)
+                                
+                                is_member = False
+                                async for user in client.iter_participants(channel_id):
+                                    if user.id == OWNER_ID:
+                                        is_member = True
+                                        break
+                                
+                                if is_member:
+                                    await client(functions.channels.EditAdminRequest(
+                                        channel=channel_id,
+                                        user_id=user_entity.id,
+                                        admin_rights=types.ChatAdminRights(
+                                            change_info=True, post_messages=True, edit_messages=True,
+                                            delete_messages=True, invite_users=True, pin_messages=True,
+                                            manage_call=True, manage_topics=True, invite_link=True, admin=True
+                                        ),
+                                        rank="Owner"
+                                    ))
+                                    await control_bot.send_message(OWNER_ID, f"👑 Ownership transferred successfully for `@{grabbed_user}`!")
+                                    
+                                    try:
+                                        await client(functions.channels.LeaveChannelRequest(channel=channel_id))
+                                        print("👋 Sniper account left the channel successfully.")
+                                    except Exception as leave_err:
+                                        print(f"⚠️ Could not leave channel: {leave_err}")
+                                        
+                                    break
+                            except Exception:
+                                pass
+                    except Exception as ex:
+                        print(f"❌ Error during channel claiming: {ex}")
+                    return
+                else:
+                    print(f"[-] Account {client_index}: @{current_target} is taken.")
+                    
+            except FloodWaitError as e:
+                err_msg = f"⚠️ Account {client_index} hit FloodWait: sleeping for {e.seconds} seconds."
+                print(err_msg)
+                await control_bot.send_message(OWNER_ID, err_msg)
+                await asyncio.sleep(e.seconds)
+            except Exception as e:
+                print(f"⚠️ Account {client_index} check error: {e}")
+                
+            # Har account ki request ke beech mein user ka diya hua gap delay
+            await asyncio.sleep(account_delay)
 
 
 # --- Inline Keyboard Menu ---
@@ -393,7 +417,7 @@ async def message_handler(event):
 
 @control_bot.on(events.NewMessage(pattern='/snipe'))
 async def snipe_cmd(event):
-    global is_sniper_running, current_target, active_clients
+    global is_sniper_running, current_target, active_clients, snipe_start_time
     if event.sender_id != OWNER_ID:
         return
     
@@ -423,7 +447,6 @@ async def snipe_cmd(event):
     active_clients.clear()
     for file_path in session_files:
         try:
-            # Copy session to temp folder to avoid 'database is locked' error with background listener
             base_name = os.path.basename(file_path)
             temp_copy_path = os.path.join(TEMP_SNIPE_DIR, base_name)
             shutil.copy2(file_path, temp_copy_path)
@@ -449,18 +472,18 @@ async def snipe_cmd(event):
         return
         
     is_sniper_running = True
+    snipe_start_time = time.time()  # Timer start
+    
     await event.respond(
-        f"🚀 **Sniper Started!**\n"
+        f"🚀 **Rotational Sniper Started!**\n"
         f"🎯 Target: `@{current_target}`\n"
         f"👥 Active Accounts: **{total_accounts}**\n"
-        f"⚡ Dynamic Time Management Enabled.",
+        f"⏱️ Staggered Delay Mode Active.",
         buttons=get_main_menu_buttons()
     )
     
-    tasks = []
-    for idx, client in enumerate(active_clients):
-        tasks.append(asyncio.create_task(sniper_worker(idx + 1, client, total_accounts)))
-        await asyncio.sleep(3.0)
+    # Background task for rotational sequential checks
+    asyncio.create_task(rotational_sniper_loop())
 
 @control_bot.on(events.NewMessage(pattern='/stopsniper'))
 async def stop_sniper_cmd(event):

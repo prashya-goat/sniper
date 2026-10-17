@@ -24,7 +24,9 @@ def keep_alive():
 API_ID = int(os.environ.get("API_ID", 0))
 API_HASH = os.environ.get("API_HASH", "")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-OWNER_USERNAME = "PARSHYA"
+
+# Teri official Telegram Numeric User ID
+OWNER_ID = 8371518130
 
 SESSION_DIR = "sessions"
 os.makedirs(SESSION_DIR, exist_ok=True)
@@ -34,15 +36,16 @@ active_clients = []
 is_sniper_running = False
 user_states = {}
 
-# --- Control Bot Client (Initialized Properly) ---
+# --- Control Bot Client ---
 control_bot = TelegramClient('bot_control_session', API_ID, API_HASH)
 
 
-# --- Smart Sniper Worker (Dynamic Timing based on Account Count) ---
+# --- Smart Sniper Worker (Dynamic Timing & Ownership Transfer) ---
 async def sniper_worker(client_index, client, total_accounts):
     global is_sniper_running, current_target
     print(f"🚀 Sniper Worker {client_index}/{total_accounts} started checking @{current_target}...")
     
+    # Jitne zyada accounts honge, us hisab se smart loop delay adjust hoga
     loop_delay = max(5.0, total_accounts * 2.0)
     
     while is_sniper_running and current_target:
@@ -54,9 +57,10 @@ async def sniper_worker(client_index, client, total_accounts):
             if result:
                 print(f"🎉 SUCCESS! Username @{current_target} is available! Grabbed by Account {client_index}")
                 grabbed_user = current_target
-                is_sniper_running = False  
+                is_sniper_running = False  # Sabhi checking rok do
                 
                 try:
+                    # 1. Create Channel
                     channel = await client(functions.channels.CreateChannelRequest(
                         title=f"Sniped {grabbed_user}",
                         about="Secured by Telegram Sniper Bot",
@@ -64,25 +68,36 @@ async def sniper_worker(client_index, client, total_accounts):
                     ))
                     channel_id = channel.chats[0].id
                     
+                    # 2. Set Username on Channel
                     await client(functions.channels.UpdateUsernameRequest(
                         channel=channel_id,
                         username=grabbed_user
                     ))
                     
+                    # 3. Export Invite Link
                     invite = await client(functions.messages.ExportChatInviteRequest(peer=channel_id))
                     
+                    # 4. Send Invite Link to Owner User ID
                     await control_bot.send_message(
-                        f"@{OWNER_USERNAME}", 
+                        OWNER_ID, 
                         f"🎉 **Username Sniped Successfully!**\n\nTarget: `@{grabbed_user}`\n\n🔗 Join this channel quickly to claim ownership:\n{invite.link}"
                     )
                     
-                    print(f"⏳ Waiting for @{OWNER_USERNAME} to join the channel for ownership transfer...")
+                    print(f"⏳ Waiting for Owner (ID: {OWNER_ID}) to join the channel for ownership transfer...")
                     while True:
                         await asyncio.sleep(5)
                         try:
-                            user_entity = await control_bot.get_entity(f"@{OWNER_USERNAME}")
-                            participants = await client.get_participants(channel_id, search=OWNER_USERNAME)
-                            if participants:
+                            user_entity = await client.get_entity(OWNER_ID)
+                            
+                            # Check if owner joined the channel
+                            is_member = False
+                            async for user in client.iter_participants(channel_id):
+                                if user.id == OWNER_ID:
+                                    is_member = True
+                                    break
+                            
+                            if is_member:
+                                # Make Owner Admin with full rights & "Owner" rank
                                 await client(functions.channels.EditAdminRequest(
                                     channel=channel_id,
                                     user_id=user_entity.id,
@@ -93,7 +108,15 @@ async def sniper_worker(client_index, client, total_accounts):
                                     ),
                                     rank="Owner"
                                 ))
-                                await control_bot.send_message(f"@{OWNER_USERNAME}", f"👑 Ownership transferred successfully for `@{grabbed_user}`!")
+                                await control_bot.send_message(OWNER_ID, f"👑 Ownership transferred successfully for `@{grabbed_user}`! You are now the Owner.")
+                                
+                                # Bot account leaves the channel after handing over ownership
+                                try:
+                                    await client(functions.channels.LeaveChannelRequest(channel=channel_id))
+                                    print("👋 Sniper account left the channel successfully.")
+                                except Exception as leave_err:
+                                    print(f"⚠️ Could not leave channel: {leave_err}")
+                                    
                                 break
                         except Exception:
                             pass
@@ -121,11 +144,11 @@ def get_main_menu_buttons():
     ]
 
 
-# --- Bot Commands & Button Handlers ---
+# --- Bot Commands & Button Handlers (Secured by OWNER_ID) ---
 
 @control_bot.on(events.NewMessage(pattern='/start'))
 async def start_cmd(event):
-    if event.sender.username != OWNER_USERNAME:
+    if event.sender_id != OWNER_ID:
         return
     await event.respond(
         "🤖 **Telegram Smart Sniper Control Panel**\n\n"
@@ -136,7 +159,7 @@ async def start_cmd(event):
 
 @control_bot.on(events.CallbackQuery)
 async def callback_query_handler(event):
-    if event.sender.username != OWNER_USERNAME:
+    if event.sender_id != OWNER_ID:
         await event.answer("Access Denied!", alert=True)
         return
     
@@ -177,7 +200,7 @@ async def callback_query_handler(event):
 async def message_handler(event):
     if not event.is_private:
         return
-    if event.sender.username != OWNER_USERNAME:
+    if event.sender_id != OWNER_ID:
         return
     
     chat_id = event.chat_id
@@ -318,7 +341,7 @@ async def message_handler(event):
 @control_bot.on(events.NewMessage(pattern='/snipe'))
 async def snipe_cmd(event):
     global is_sniper_running, current_target, active_clients
-    if event.sender.username != OWNER_USERNAME:
+    if event.sender_id != OWNER_ID:
         return
     
     args = event.text.split(' ', 1)
@@ -369,7 +392,7 @@ async def snipe_cmd(event):
 @control_bot.on(events.NewMessage(pattern='/stopsniper'))
 async def stop_sniper_cmd(event):
     global is_sniper_running
-    if event.sender.username != OWNER_USERNAME:
+    if event.sender_id != OWNER_ID:
         return
     is_sniper_running = False
     await event.respond("🛑 Sniper stopped successfully.")

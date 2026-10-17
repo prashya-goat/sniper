@@ -2,6 +2,7 @@ import asyncio
 import os
 import shutil
 import time
+import random
 import zipfile
 from telethon import TelegramClient, functions, types, events, Button
 from telethon.sessions import StringSession
@@ -72,7 +73,7 @@ async def start_session_otp_listeners():
             print(f"⚠️ Could not start listener for {file_path}: {e}")
 
 
-# --- Advanced Staggered Sniper Loop (10s gap per account / 50s total loop gap) ---
+# --- Anti-Detection Staggered Sniper Loop with Random Jitter & Public Channel ---
 async def advanced_sniper_loop():
     global is_sniper_running, current_target, active_clients, snipe_start_time, total_attempts, account_stats_map
     
@@ -82,7 +83,7 @@ async def advanced_sniper_loop():
             is_sniper_running = False
             return
 
-        print(f"🚀 Staggered Sniper Loop started with {total_accounts} accounts targeting @{current_target}...")
+        print(f"🚀 Anti-Detection Sniper Loop started with {total_accounts} accounts targeting @{current_target}...")
         
         while is_sniper_running and current_target:
             
@@ -116,6 +117,7 @@ async def advanced_sniper_loop():
                         is_sniper_running = False  
                         
                         try:
+                            # 🌐 Public Channel Creation taaki username publically claim ho sake
                             channel = await client(functions.channels.CreateChannelRequest(
                                 title=f"Sniped {grabbed_user}",
                                 about="Secured by Telegram Sniper Bot",
@@ -186,17 +188,19 @@ async def advanced_sniper_loop():
                     stats['status'] = f"⚠️ FloodWait ({wait_sec}s)"
                     err_msg = f"⚠️ **FloodWait Alert!**\nAccount #{client_index} hit a delay of **{wait_sec} seconds**. Pausing requests for this account."
                     print(err_msg)
-                    # Turant direct message bhejega owner ko
                     await control_bot.send_message(OWNER_ID, err_msg)
                 except Exception as e:
                     stats['status'] = f"❌ Error: {str(e)[:30]}"
                     print(f"⚠️ Account #{client_index} check error: {e}")
                     
-                # ⏱️ Yahan exact 10 seconds ka gap rakha gaya hai har account ke beech mein
-                await asyncio.sleep(10.0)
+                # ⏱️ Human-like Random Jitter Delay Formula
+                base_delay = 50.0 / total_accounts
+                jitter = random.uniform(-1.5, 2.5)
+                sleep_time = max(2.0, base_delay + jitter)
                 
-            # Ek full round hone ke baad thoda sa pause taaki loop smoothly chalta rahe
-            await asyncio.sleep(2.0)
+                await asyncio.sleep(sleep_time)
+                
+            await asyncio.sleep(random.uniform(1.0, 3.0))
             
     except Exception as loop_err:
         is_sniper_running = False
@@ -549,10 +553,10 @@ async def snipe_cmd(event):
     total_attempts = 0
     
     await event.respond(
-        f"🚀 **Staggered Sniper Started!**\n"
+        f"🚀 **Anti-Detection Sniper Started!**\n"
         f"🎯 Target: `@{current_target}`\n"
         f"👥 Active Accounts: **{total_accounts}**\n"
-        f"⏱️ **Gap Mode:** 10s delay between each account request.\n\n"
+        f"⏱️ **Jitter Mode:** Randomized human-like timing active.\n\n"
         f"💡 Ab `/stat` bhej kar check kar sakta hai!",
         buttons=get_main_menu_buttons()
     )

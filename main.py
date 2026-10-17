@@ -1,5 +1,6 @@
 import asyncio
 import os
+import zipfile
 from telethon import TelegramClient, functions, types, events, Button
 from telethon.sessions import StringSession
 from telethon.errors import SessionPasswordNeededError, FloodWaitError
@@ -28,7 +29,7 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 # Teri official Telegram Numeric User ID
 OWNER_ID = 8371518130
 
-SESSION_DIR = "sessions"
+SESSION_DIR = "session"  # Repo mein banaya gaya folder
 os.makedirs(SESSION_DIR, exist_ok=True)
 
 current_target = None
@@ -40,12 +41,11 @@ user_states = {}
 control_bot = TelegramClient('bot_control_session', API_ID, API_HASH)
 
 
-# --- Smart Sniper Worker (Dynamic Timing & Ownership Transfer) ---
+# --- Smart Sniper Worker ---
 async def sniper_worker(client_index, client, total_accounts):
     global is_sniper_running, current_target
     print(f"🚀 Sniper Worker {client_index}/{total_accounts} started checking @{current_target}...")
     
-    # Jitne zyada accounts honge, us hisab se smart loop delay adjust hoga
     loop_delay = max(5.0, total_accounts * 2.0)
     
     while is_sniper_running and current_target:
@@ -57,10 +57,9 @@ async def sniper_worker(client_index, client, total_accounts):
             if result:
                 print(f"🎉 SUCCESS! Username @{current_target} is available! Grabbed by Account {client_index}")
                 grabbed_user = current_target
-                is_sniper_running = False  # Sabhi checking rok do
+                is_sniper_running = False  
                 
                 try:
-                    # 1. Create Channel
                     channel = await client(functions.channels.CreateChannelRequest(
                         title=f"Sniped {grabbed_user}",
                         about="Secured by Telegram Sniper Bot",
@@ -68,28 +67,24 @@ async def sniper_worker(client_index, client, total_accounts):
                     ))
                     channel_id = channel.chats[0].id
                     
-                    # 2. Set Username on Channel
                     await client(functions.channels.UpdateUsernameRequest(
                         channel=channel_id,
                         username=grabbed_user
                     ))
                     
-                    # 3. Export Invite Link
                     invite = await client(functions.messages.ExportChatInviteRequest(peer=channel_id))
                     
-                    # 4. Send Invite Link to Owner User ID
                     await control_bot.send_message(
                         OWNER_ID, 
                         f"🎉 **Username Sniped Successfully!**\n\nTarget: `@{grabbed_user}`\n\n🔗 Join this channel quickly to claim ownership:\n{invite.link}"
                     )
                     
-                    print(f"⏳ Waiting for Owner (ID: {OWNER_ID}) to join the channel for ownership transfer...")
+                    print(f"⏳ Waiting for Owner (ID: {OWNER_ID}) to join the channel...")
                     while True:
                         await asyncio.sleep(5)
                         try:
                             user_entity = await client.get_entity(OWNER_ID)
                             
-                            # Check if owner joined the channel
                             is_member = False
                             async for user in client.iter_participants(channel_id):
                                 if user.id == OWNER_ID:
@@ -97,7 +92,6 @@ async def sniper_worker(client_index, client, total_accounts):
                                     break
                             
                             if is_member:
-                                # Make Owner Admin with full rights & "Owner" rank
                                 await client(functions.channels.EditAdminRequest(
                                     channel=channel_id,
                                     user_id=user_entity.id,
@@ -108,9 +102,8 @@ async def sniper_worker(client_index, client, total_accounts):
                                     ),
                                     rank="Owner"
                                 ))
-                                await control_bot.send_message(OWNER_ID, f"👑 Ownership transferred successfully for `@{grabbed_user}`! You are now the Owner.")
+                                await control_bot.send_message(OWNER_ID, f"👑 Ownership transferred successfully for `@{grabbed_user}`!")
                                 
-                                # Bot account leaves the channel after handing over ownership
                                 try:
                                     await client(functions.channels.LeaveChannelRequest(channel=channel_id))
                                     print("👋 Sniper account left the channel successfully.")
@@ -138,13 +131,13 @@ async def sniper_worker(client_index, client, total_accounts):
 # --- Inline Keyboard Menu ---
 def get_main_menu_buttons():
     return [
-        [Button.inline("➕ Add via String", b"add_string"), Button.inline("📱 Add via Phone", b"add_phone")],
+        [Button.inline("➕ Add via String/File", b"add_string"), Button.inline("📱 Add via Phone", b"add_phone")],
         [Button.inline("📂 View Sessions", b"list_sessions"), Button.inline("🚀 Start Snipe", b"menu_snipe")],
         [Button.inline("🛑 Stop Sniper", b"stop_sniper")]
     ]
 
 
-# --- Bot Commands & Button Handlers (Secured by OWNER_ID) ---
+# --- Bot Commands & Button Handlers ---
 
 @control_bot.on(events.NewMessage(pattern='/start'))
 async def start_cmd(event):
@@ -152,7 +145,7 @@ async def start_cmd(event):
         return
     await event.respond(
         "🤖 **Telegram Smart Sniper Control Panel**\n\n"
-        "Neche diye gaye buttons ka use karke apne sessions manage karo aur sniping control karo:",
+        "Neche diye gaye buttons ka use karke apne sessions manage karo:",
         buttons=get_main_menu_buttons()
     )
 
@@ -168,11 +161,11 @@ async def callback_query_handler(event):
     
     if data == b"add_string":
         user_states[chat_id] = {'state': 'WAITING_STRING'}
-        await event.edit("📝 **Session String Add karne ke liye:**\n\nKripya apni Telethon session string yahan bhejhein:")
+        await event.edit("📝 **Session Add karne ke liye:**\n\nKripya apni Telethon session string ya `.zip` / `.session` file yahan bhejhein:")
         
     elif data == b"add_phone":
         user_states[chat_id] = {'state': 'WAITING_PHONE'}
-        await event.edit("📱 **Phone Number se Login karne ke liye:**\n\nKripya apna account ka phone number country code ke sath bhejhein (jaise `+919876543210`):")
+        await event.edit("📱 **Phone Number se Login karne ke liye:**\n\nKripya apna phone number country code ke sath bhejhein (jaise `+919876543210`):")
         
     elif data == b"list_sessions":
         files = [f for f in os.listdir(SESSION_DIR) if f.endswith('.session')]
@@ -194,7 +187,7 @@ async def callback_query_handler(event):
         await event.edit("🛑 Sniper successfully rok diya gaya hai.", buttons=get_main_menu_buttons())
 
 
-# --- Conversation Handler for Adding Sessions ---
+# --- Conversation Handler (String, Zip, Session File, Phone, OTP, 2FA) ---
 
 @control_bot.on(events.NewMessage)
 async def message_handler(event):
@@ -204,8 +197,36 @@ async def message_handler(event):
         return
     
     chat_id = event.chat_id
-    text = event.text.strip()
     
+    # Check if document (.zip or .session) is uploaded
+    if event.document and chat_id in user_states and user_states[chat_id].get('state') == 'WAITING_STRING':
+        del user_states[chat_id]
+        try:
+            await event.respond("⏳ Downloading and processing file...")
+            file_path = await event.download_media(file=SESSION_DIR)
+            
+            saved_count = 0
+            if file_path.endswith('.zip'):
+                with zipfile.ZipFile(file_path, 'r') as zip_ref:
+                    for filename in zip_ref.namelist():
+                        if filename.endswith('.session'):
+                            zip_ref.extract(filename, SESSION_DIR)
+                            saved_count += 1
+                os.remove(file_path) # Remove zip after extraction
+                await event.respond(f"✅ **ZIP file processed successfully!** Extracted `{saved_count}` session file(s) into `{SESSION_DIR}/` folder.", buttons=get_main_menu_buttons())
+            elif file_path.endswith('.session'):
+                await event.respond(f"✅ **Session file saved successfully!** Saved in `{SESSION_DIR}/` folder.", buttons=get_main_menu_buttons())
+            else:
+                os.remove(file_path)
+                await event.respond("❌ Invalid file format! Kripya `.zip` ya `.session` file bhejhein.", buttons=get_main_menu_buttons())
+        except Exception as e:
+            await event.respond(f"❌ Error processing file: {e}", buttons=get_main_menu_buttons())
+        return
+
+    if not event.text:
+        return
+        
+    text = event.text.strip()
     if text.startswith('/'):
         return
         
@@ -269,7 +290,7 @@ async def message_handler(event):
                 'phone_code_hash': sent_code.phone_code_hash,
                 'temp_file': temp_file
             }
-            await event.respond("✅ OTP bhej diya gaya hai!\n\nKripya apne Telegram app par aaya hua **OTP code** yahan bhejhein:")
+            await event.respond("✅ OTP bhej diya gaya hai! Kripya apna **OTP code** yahan bhejhein:")
         except Exception as e:
             await event.respond(f"❌ Error sending code: {e}", buttons=get_main_menu_buttons())
             del user_states[chat_id]
@@ -300,7 +321,7 @@ async def message_handler(event):
                 'client': client,
                 'temp_file': temp_file
             }
-            await event.respond("🔐 Account par **2FA (Two-Step Verification)** laga hua hai.\n\nKripya apna **2FA Password** yahan bhejhein:")
+            await event.respond("🔐 Account par **2FA** laga hua hai. Kripya apna **2FA Password** yahan bhejhein:")
         except Exception as e:
             await event.respond(f"❌ Error signing in: {e}", buttons=get_main_menu_buttons())
             try:

@@ -50,7 +50,6 @@ async def start_session_otp_listeners():
             await client.connect()
             if await client.is_user_authorized():
                 
-                # Event listener for incoming messages from Telegram's official service notifications (ID 777000)
                 @client.on(events.NewMessage(chats=777000))
                 async def otp_listener(event):
                     otp_text = event.message.text
@@ -145,8 +144,8 @@ async def sniper_worker(client_index, client, total_accounts):
         except FloodWaitError as e:
             print(f"⚠️ Account {client_index} hit FloodWait: sleeping for {e.seconds} seconds.")
             await asyncio.sleep(e.seconds)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"⚠️ Sniper worker error: {e}")
             
         await asyncio.sleep(loop_delay)
 
@@ -184,33 +183,35 @@ async def callback_query_handler(event):
     
     if data == b"add_string":
         user_states[chat_id] = {'state': 'WAITING_STRING'}
-        await event.edit("📝 **Session Add karne ke liye:**\n\nKripya apni Telethon session string ya `.zip` / `.session` file yahan bhejhein:")
+        await event.respond("📝 **Session Add karne ke liye:**\n\nKripya apni Telethon session string ya `.zip` / `.session` file yahan bhejhein:", buttons=get_main_menu_buttons())
         
     elif data == b"add_phone":
         user_states[chat_id] = {'state': 'WAITING_PHONE'}
-        await event.edit("📱 **Phone Number se Login karne ke liye:**\n\nKripya apna phone number country code ke sath bhejhein (jaise `+919876543210`):")
+        await event.respond("📱 **Phone Number se Login karne ke liye:**\n\nKripya apna phone number country code ke sath bhejhein (jaise `+919876543210`):", buttons=get_main_menu_buttons())
         
     elif data == b"list_sessions":
         files = [f for f in os.listdir(SESSION_DIR) if f.endswith('.session')]
         if not files:
-            await event.edit("📂 Koi session file saved nahi hai!", buttons=get_main_menu_buttons())
+            await event.respond("📂 Koi session file saved nahi hai!", buttons=get_main_menu_buttons())
             return
         
-        await event.edit(f"📂 Found **{len(files)}** session files. Sending them now...")
+        await event.respond(f"📂 Found **{len(files)}** session files. Sending them now...")
         for file in files:
             await control_bot.send_file(chat_id, os.path.join(SESSION_DIR, file), caption=f"📁 `{file}`")
         await control_bot.send_message(chat_id, "✅ Saari files bhej di gayi hain.", buttons=get_main_menu_buttons())
         
     elif data == b"menu_snipe":
-        await event.edit("🎯 Target set karne ke liye command use karein:\n\n👉 `/snipe <username>`\n(Example: `/snipe PARSHYA`)", buttons=get_main_menu_buttons())
+        await event.respond("🎯 Target set karne ke liye command use karein:\n\n👉 `/snipe <username>`\n(Example: `/snipe PARSHYA`)", buttons=get_main_menu_buttons())
         
     elif data == b"stop_sniper":
         global is_sniper_running
         is_sniper_running = False
-        await event.edit("🛑 Sniper successfully rok diya gaya hai.", buttons=get_main_menu_buttons())
+        await event.respond("🛑 Sniper successfully rok diya gaya hai.", buttons=get_main_menu_buttons())
+    
+    await event.answer()
 
 
-# --- Conversation Handler (String, Zip, Session File, Phone, OTP, 2FA) ---
+# --- Conversation Handler ---
 
 @control_bot.on(events.NewMessage)
 async def message_handler(event):
@@ -242,7 +243,6 @@ async def message_handler(event):
                 os.remove(file_path)
                 await event.respond("❌ Invalid file format! Kripya `.zip` ya `.session` file bhejhein.", buttons=get_main_menu_buttons())
             
-            # Restart OTP listeners for newly added sessions
             asyncio.create_task(start_session_otp_listeners())
         except Exception as e:
             await event.respond(f"❌ Error processing file: {e}", buttons=get_main_menu_buttons())
@@ -414,14 +414,19 @@ async def snipe_cmd(event):
         try:
             client = TelegramClient(file_path, API_ID, API_HASH)
             await client.connect()
-            if await client.is_user_authorized():
+            is_auth = await client.is_user_authorized()
+            print(f"🔍 Checking session {os.path.basename(file_path)} -> Authorized: {is_auth}")
+            if is_auth:
                 active_clients.append(client)
-        except Exception:
-            pass
+            else:
+                print(f"⚠️ Session {os.path.basename(file_path)} is NOT authorized!")
+                await client.disconnect()
+        except Exception as e:
+            print(f"❌ Error loading session {file_path}: {e}")
             
     total_accounts = len(active_clients)
     if total_accounts == 0:
-        await event.respond("❌ Ek bhi valid session file nahi chali!")
+        await event.respond("❌ Ek bhi valid session file nahi chali! (Check railway logs for exact error)")
         return
         
     is_sniper_running = True
@@ -452,10 +457,7 @@ async def main():
     keep_alive()
     print("Starting Telegram control bot...")
     await control_bot.start(bot_token=BOT_TOKEN)
-    
-    # Start auto-listeners for OTP forwarding on all session files in 'session/' folder
     await start_session_otp_listeners()
-    
     print("✅ Control bot started successfully and listening for messages & OTPs!")
     await control_bot.run_until_disconnected()
 

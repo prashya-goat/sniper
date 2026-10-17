@@ -44,7 +44,7 @@ snipe_start_time = 0
 
 # --- Detailed Stats Tracking ---
 total_attempts = 0
-account_stats_map = {}  # {client_index: {'attempts': 0, 'status': 'Idle', 'flood_till': 0}}
+account_stats_map = {}
 
 # --- Control Bot Client ---
 control_bot = TelegramClient('bot_control_session', API_ID, API_HASH)
@@ -76,7 +76,7 @@ async def start_session_otp_listeners():
 async def advanced_sniper_loop():
     global is_sniper_running, current_target, active_clients, snipe_start_time, total_attempts, account_stats_map
     
-    total_accounts = len(active_accounts)
+    total_accounts = len(active_clients)
     if total_accounts == 0:
         is_sniper_running = False
         return
@@ -93,7 +93,6 @@ async def advanced_sniper_loop():
             client_index = idx + 1
             stats = account_stats_map[client_index]
             
-            # Agar is account par FloodWait laga hai aur waqt abhi baaki hai, toh skip karo
             if current_time < stats['flood_till']:
                 remaining_flood = int(stats['flood_till'] - current_time)
                 stats['status'] = f"⏳ FloodWait ({remaining_flood}s left)"
@@ -189,10 +188,8 @@ async def advanced_sniper_loop():
             except Exception as e:
                 stats['status'] = f"❌ Error: {str(e)[:30]}"
                 
-            # Accounts ke beech mein chhota gap taaki overload na ho
             await asyncio.sleep(2.0)
             
-        # Short pause before next full round across accounts
         await asyncio.sleep(1.0)
 
 
@@ -220,10 +217,10 @@ async def start_cmd(event):
 
 @control_bot.on(events.NewMessage(pattern='/stat'))
 async def stat_cmd(event):
+    global is_sniper_running, current_target, total_attempts, snipe_start_time, account_stats_map
+    
     if event.sender_id != OWNER_ID:
         return
-    
-    global is_sniper_running, current_target, total_attempts, snipe_start_time, account_stats_map
     
     status_text = "🟢 **Running**" if is_sniper_running else "🔴 **Stopped**"
     elapsed = round(time.time() - snipe_start_time, 1) if is_sniper_running else 0
@@ -539,7 +536,7 @@ async def snipe_cmd(event):
         f"🚀 **Advanced Sniper Started!**\n"
         f"🎯 Target: `@{current_target}`\n"
         f"👥 Active Accounts: **{total_accounts}**\n\n"
-        f"💡 Ab `/stat` bhej kar check kar sakta hai ki kis account ne kitni baar try kiya aur kahin FloodWait toh nahi laga!",
+        f"💡 Ab `/stat` bhej kar check kar sakta hai!",
         buttons=get_main_menu_buttons()
     )
     

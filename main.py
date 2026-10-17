@@ -1,5 +1,6 @@
 import asyncio
 import os
+import shutil
 import zipfile
 from telethon import TelegramClient, functions, types, events, Button
 from telethon.sessions import StringSession
@@ -30,7 +31,9 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 OWNER_ID = 8371518130
 
 SESSION_DIR = "session"
+TEMP_SNIPE_DIR = "temp_snipe"
 os.makedirs(SESSION_DIR, exist_ok=True)
+os.makedirs(TEMP_SNIPE_DIR, exist_ok=True)
 
 current_target = None
 active_clients = []
@@ -410,16 +413,28 @@ async def snipe_cmd(event):
         await event.respond("❌ Koi session file nahi mili! Pehle sessions add karo.", buttons=get_main_menu_buttons())
         return
         
+    # Clear temp folder before copying
+    for f in os.listdir(TEMP_SNIPE_DIR):
+        try:
+            os.remove(os.path.join(TEMP_SNIPE_DIR, f))
+        except:
+            pass
+
     active_clients.clear()
     for file_path in session_files:
         try:
-            client = TelegramClient(file_path, API_ID, API_HASH)
+            # Copy session to temp folder to avoid 'database is locked' error with background listener
+            base_name = os.path.basename(file_path)
+            temp_copy_path = os.path.join(TEMP_SNIPE_DIR, base_name)
+            shutil.copy2(file_path, temp_copy_path)
+            
+            client = TelegramClient(temp_copy_path, API_ID, API_HASH)
             await client.connect()
             is_auth = await client.is_user_authorized()
             if is_auth:
                 active_clients.append(client)
             else:
-                err_msg = f"⚠️ Session Unauthorized: {os.path.basename(file_path)}"
+                err_msg = f"⚠️ Session Unauthorized: {base_name}"
                 print(err_msg)
                 await control_bot.send_message(OWNER_ID, err_msg)
                 await client.disconnect()

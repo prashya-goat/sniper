@@ -3,7 +3,6 @@ import os
 import shutil
 import time
 import random
-import itertools
 import zipfile
 from telethon import TelegramClient, functions, types, events, Button
 from telethon.sessions import StringSession
@@ -16,7 +15,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "Telegram Username Scanner Bot is Running!"
+    return "Telegram Direct Profile Sniper Bot is Running!"
 
 def run_flask():
     app.run(host='0.0.0.0', port=8080)
@@ -38,14 +37,16 @@ TEMP_SNIPE_DIR = "temp_snipe"
 os.makedirs(SESSION_DIR, exist_ok=True)
 os.makedirs(TEMP_SNIPE_DIR, exist_ok=True)
 
-is_scanner_running = False
+# Target Username
+TARGET_USERNAME = "vipiya"
+
+is_sniper_running = False
 active_clients = []
 user_states = {}
-scanner_start_time = 0
+sniper_start_time = 0
 
 # --- Stats Tracking ---
-total_checked = 0
-found_usernames = []
+total_checks = 0
 account_stats_map = {}
 
 # --- Control Bot Client ---
@@ -71,29 +72,22 @@ async def start_session_otp_listeners():
             print(f"⚠️ Listener error: {e}")
 
 
-# --- Bulk Scanner Loop (Monitor & Alert Only - No Claiming) ---
-async def bulk_scanner_loop():
-    global is_scanner_running, active_clients, scanner_start_time, total_checked, found_usernames, account_stats_map
+# --- Direct Profile Claim Sniper Loop (Staggered Multi-Account Rotation) ---
+async def direct_profile_sniper_loop():
+    global is_sniper_running, active_clients, sniper_start_time, total_checks, account_stats_map
     
     try:
         total_accounts = len(active_clients)
         if total_accounts == 0:
-            is_scanner_running = False
+            is_sniper_running = False
             return
 
-        # 17,576 combinations generate karna (e.g., a_a_a, a_a_b ... z_z_z)
-        letters = 'abcdefghijklmnopqrstuvwxyz'
-        all_combinations = [f"{i}_{j}_{k}" for i, j, k in itertools.product(letters, repeat=3)]
+        print(f"🚀 Direct Profile Sniper started for @{TARGET_USERNAME} using {total_accounts} accounts...")
         
-        print(f"🚀 Bulk Scanner Loop started with {total_accounts} accounts checking {len(all_combinations)} combinations...")
-        
-        combo_index = 0
-        total_combos = len(all_combinations)
-        
-        while is_scanner_running and combo_index < total_combos:
+        while is_sniper_running:
             
             for idx, client in enumerate(active_clients):
-                if not is_scanner_running or combo_index >= total_combos:
+                if not is_sniper_running:
                     break
                     
                 client_index = idx + 1
@@ -102,36 +96,43 @@ async def bulk_scanner_loop():
                 
                 # 🛑 FloodWait Check
                 if current_time < stats['flood_till']:
-                    remaining_flood = int(stats['flood_till'] - current_time)
-                    stats['status'] = f"⏳ FloodWait ({remaining_flood}s)"
                     continue  
                 
-                target = all_combinations[combo_index]
-                combo_index += 1
-                
                 try:
-                    stats['status'] = f"🟢 Checking @{target}"
-                    total_checked += 1
-                    stats['checked'] += 1
+                    stats['status'] = "🟢 Checking..."
+                    total_checks += 1
+                    stats['checks'] += 1
                     
+                    # 1. Check availability
                     result = await client(functions.account.CheckUsernameRequest(
-                        username=target
+                        username=TARGET_USERNAME
                     ))
                     
                     if result:
-                        # Agar available hai, toh sirf alert bhejo (No Channel Creation)
-                        found_usernames.append(target)
-                        print(f"🎉 FOUND AVAILABLE USERNAME: @{target}")
+                        print(f"🔥 TARGET APPEARS FREE: @{TARGET_USERNAME}! Attempting to claim on profile...")
+                        stats['status'] = "⚡ Claiming..."
                         
-                        await control_bot.send_message(
-                            OWNER_ID,
-                            f"🔥 **Available Username Found!**\n\n"
-                            f"🎯 Username: `@{target}`\n"
-                            f"👥 Checked by Account #{client_index}\n"
-                            f"⚡ Jaldi jaakar claim kar le!"
-                        )
+                        # 2. Try to claim directly to the account profile
+                        try:
+                            await client(functions.account.UpdateUsernameRequest(
+                                username=TARGET_USERNAME
+                            ))
+                            
+                            is_sniper_running = False
+                            success_msg = (
+                                f"🎉 **Username Claimed Successfully on Profile!**\n\n"
+                                f"🎯 Target: `@{TARGET_USERNAME}`\n"
+                                f"👥 Claimed by Account #{client_index}"
+                            )
+                            print(success_msg)
+                            await control_bot.send_message(OWNER_ID, success_msg)
+                            return
+                            
+                        except Exception as claim_err:
+                            print(f"⚠️ Claim failed: {claim_err}")
+                            stats['status'] = f"❌ Claim Error"
                     else:
-                        stats['status'] = f"🔴 @{target} (Taken)"
+                        stats['status'] = "🔴 Taken"
                         
                 except FloodWaitError as e:
                     wait_sec = e.seconds
@@ -140,31 +141,24 @@ async def bulk_scanner_loop():
                     print(f"⚠️ Account #{client_index} hit FloodWait: {wait_sec}s")
                 except Exception as e:
                     stats['status'] = f"❌ Error"
-                    print(f"⚠️ Check error on @{target}: {e}")
+                    print(f"⚠️ Check error on @{TARGET_USERNAME}: {e}")
                 
-                # ⏱️ Anti-Detection Jitter Delay (50s total cycle distributed among accounts)
-                base_delay = 50.0 / total_accounts
-                jitter = random.uniform(-1.0, 2.0)
-                sleep_time = max(1.5, base_delay + jitter)
+                # Staggered small delay between accounts so they don't fire simultaneously
+                await asyncio.sleep(5.0 / total_accounts if total_accounts > 0 else 5.0)
                 
-                await asyncio.sleep(sleep_time)
-                
-            await asyncio.sleep(random.uniform(1.0, 2.5))
+            await asyncio.sleep(1.0)
             
-        is_scanner_running = False
-        await control_bot.send_message(OWNER_ID, "🏁 **Scanning Complete!** Saare 17,576 combinations check ho chuke hain.")
-        
     except Exception as loop_err:
-        is_scanner_running = False
-        print(f"❌ Scanner Loop Crashed: {loop_err}")
+        is_sniper_running = False
+        print(f"❌ Sniper Loop Crashed: {loop_err}")
 
 
 # --- Inline Keyboard Menu ---
 def get_main_menu_buttons():
     return [
         [Button.inline("➕ Add Sessions", b"add_string"), Button.inline("📂 View Sessions", b"list_sessions")],
-        [Button.inline("🚀 Start Scan (17k+)", b"start_scan"), Button.inline("📊 Check Status", b"check_stat")],
-        [Button.inline("🛑 Stop Scanner", b"stop_scanner")]
+        [Button.inline("🚀 Start Profile Snipe (@vipiya)", b"start_snipe"), Button.inline("📊 Check Status", b"check_stat")],
+        [Button.inline("🛑 Stop Sniper", b"stop_sniper")]
     ]
 
 
@@ -175,20 +169,21 @@ async def start_cmd(event):
     if event.sender_id != OWNER_ID:
         return
     await event.respond(
-        "🤖 **Telegram 5-Character Pattern Scanner**\n\n"
-        "Ye bot 17,576 combinations (`a_a_a` to `z_z_z`) ko bina claim kiye chupchaap monitor karega aur available milne par alert dega.",
+        f"🤖 **Telegram Direct Profile Sniper Bot**\n\n"
+        f"Target Username: `@{TARGET_USERNAME}`\n"
+        f"Saare accounts bari-bari se check karenge aur available hote hi profile par claim kar lenge.",
         buttons=get_main_menu_buttons()
     )
 
 
-@control_bot.on(events.NewMessage(pattern='/scan'))
-async def scan_cmd(event):
-    global is_scanner_running, active_clients, scanner_start_time, total_checked, found_usernames, account_stats_map
+@control_bot.on(events.NewMessage(pattern='/snipe'))
+async def snipe_cmd(event):
+    global is_sniper_running, active_clients, sniper_start_time, total_checks, account_stats_map
     if event.sender_id != OWNER_ID:
         return
         
-    if is_scanner_running:
-        await event.respond("⚠️ Scanner pehle se hi chal raha hai!")
+    if is_sniper_running:
+        await event.respond(f"⚠️ Sniper pehle se hi `@{TARGET_USERNAME}` ke liye chal raha hai!")
         return
         
     session_files = [os.path.join(SESSION_DIR, f) for f in os.listdir(SESSION_DIR) if f.endswith('.session')]
@@ -210,9 +205,9 @@ async def scan_cmd(event):
             await client.connect()
             if await client.is_user_authorized():
                 active_clients.append(client)
-                account_stats_map[client_index] = {'checked': 0, 'status': '🟢 Ready', 'flood_till': 0}
+                account_stats_map[client_index] = {'checks': 0, 'status': '🟢 Ready', 'flood_till': 0}
             else:
-                account_stats_map[client_index] = {'checked': 0, 'status': '⚠️ Unauthorized', 'flood_till': 0}
+                account_stats_map[client_index] = {'checks': 0, 'status': '⚠️ Unauthorized', 'flood_till': 0}
                 await client.disconnect()
         except Exception:
             pass
@@ -221,62 +216,58 @@ async def scan_cmd(event):
         await event.respond("❌ Koi bhi valid session active nahi hai!")
         return
         
-    is_scanner_running = True
-    scanner_start_time = time.time()
-    total_checked = 0
-    found_usernames.clear()
+    is_sniper_running = True
+    sniper_start_time = time.time()
+    total_checks = 0
     
     await event.respond(
-        f"🚀 **Bulk Scanner Started!**\n"
+        f"🚀 **Direct Profile Sniper Started!**\n"
+        f"🎯 Target: `@{TARGET_USERNAME}`\n"
         f"👥 Active Accounts: `{len(active_clients)}`\n"
-        f"📋 Target: `17,576 combinations (a_a_a to z_z_z)`\n"
-        f"🔔 Mode: Monitor & Alert Only (No claiming)",
+        f"⚡ Mode: Direct Profile Claiming (Staggered Rotation)",
         buttons=get_main_menu_buttons()
     )
     
-    asyncio.create_task(bulk_scanner_loop())
+    asyncio.create_task(direct_profile_sniper_loop())
 
 
 @control_bot.on(events.NewMessage(pattern='/stat'))
 async def stat_cmd(event):
-    global is_scanner_running, total_checked, found_usernames, scanner_start_time, account_stats_map
+    global is_sniper_running, total_checks, sniper_start_time, account_stats_map
     if event.sender_id != OWNER_ID:
         return
         
-    status = "🟢 **Running**" if is_scanner_running else "🔴 **Stopped**"
-    elapsed = round(time.time() - scanner_start_time, 1) if is_scanner_running else 0
+    status = "🟢 **Running**" if is_sniper_running else "🔴 **Stopped**"
+    elapsed = round(time.time() - sniper_start_time, 1) if is_sniper_running else 0
     
     msg = (
-        f"📊 **Scanner Statistics**\n\n"
+        f"📊 **Sniper Statistics**\n\n"
         f"⚙️ **Status:** {status}\n"
-        f"🔄 **Total Checked:** `{total_checked} / 17,576`\n"
-        f"🎉 **Found Available:** `{len(found_usernames)}`\n"
+        f"🎯 **Target:** `@{TARGET_USERNAME}`\n"
+        f"🔄 **Total Checks:** `{total_checks}`\n"
         f"⏱️ **Elapsed Time:** `{elapsed}s`\n\n"
         f"📋 **Account Wise Status:**\n"
     )
     
     for acc_id, data in account_stats_map.items():
-        msg += f"- **Account #{acc_id}** ➔ Checked: `{data['checked']}` | {data['status']}\n"
-        
-    if found_usernames:
-        msg += f"\n🔥 **Available List:**\n" + ", ".join(f"`@{u}`" for u in found_usernames[:10])
+        msg += f"- **Account #{acc_id}** ➔ Checks: `{data['checks']}` | {data['status']}\n"
         
     await event.respond(msg, buttons=get_main_menu_buttons())
 
 
 @control_bot.on(events.NewMessage(pattern='/stop'))
 async def stop_cmd(event):
-    global is_scanner_running
+    global is_sniper_running
     if event.sender_id != OWNER_ID:
         return
-    is_scanner_running = False
-    await event.respond("🛑 Scanner successfully rok diya gaya hai.")
+    is_sniper_running = False
+    await event.respond("🛑 Sniper successfully rok diya gaya hai.")
 
 
 # --- Callback Handlers ---
 @control_bot.on(events.CallbackQuery)
 async def callback_handler(event):
-    global is_scanner_running
+    global is_sniper_running
     if event.sender_id != OWNER_ID:
         await event.answer("Access Denied!", alert=True)
         return
@@ -294,16 +285,15 @@ async def callback_handler(event):
             return
         for f in files:
             await control_bot.send_file(chat_id, os.path.join(SESSION_DIR, f))
-    elif data == b"start_scan":
-        # Simulate /scan command trigger
-        event.text = "/scan"
-        await scan_cmd(event)
+    elif data == b"start_snipe":
+        event.text = "/snipe"
+        await snipe_cmd(event)
     elif data == b"check_stat":
         event.text = "/stat"
         await stat_cmd(event)
-    elif data == b"stop_scanner":
-        is_scanner_running = False
-        await event.respond("🛑 Scanner stopped.")
+    elif data == b"stop_sniper":
+        is_sniper_running = False
+        await event.respond("🛑 Sniper stopped.")
         
     await event.answer()
 
@@ -329,10 +319,10 @@ async def file_handler(event):
 # --- Main Entry Point ---
 async def main():
     keep_alive()
-    print("Starting Scanner Control Bot...")
+    print("Starting Direct Profile Sniper Bot...")
     await control_bot.start(bot_token=BOT_TOKEN)
     await start_session_otp_listeners()
-    print("✅ Bot is online and ready!")
+    print("✅ Bot is online and sniping @vipiya directly to profile!")
     await control_bot.run_until_disconnected()
 
 if __name__ == '__main__':
